@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 # --- HIER DEINEN KANALNAMEN EINTRAGEN ---
-KANAL_NAME = "max-schmeling-halle-warner"  # <--- Ändere das zu dem Namen aus Schritt 1 !!
+KANAL_NAME = "max-schmeling-halle-warner"
 # ----------------------------------------
 
 def check_events():
@@ -15,7 +15,7 @@ def check_events():
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
         
-        # Heutiges Datum holen (z.B. "16.02.2024" und "16.02.24")
+        # Heutiges Datum holen
         heute = datetime.now()
         datum_lang = heute.strftime("%d.%m.%Y") 
         datum_kurz = heute.strftime("%d.%m.%y")
@@ -29,8 +29,13 @@ def check_events():
             requests.post(
                 f"https://ntfy.sh/{KANAL_NAME}",
                 data=nachricht.encode('utf-8'),
-                headers={"Title": "Parkplatz Alarm 🚗", "Priority": "high"}
+                headers={
+                    "Title": "Parkplatz Alarm",  # <--- HIER KEIN EMOJI MEHR!
+                    "Priority": "high",
+                    "Tags": "car,warning"        # <--- Das Auto kommt jetzt hier hin!
+                }
             )
+            print("Nachricht erfolgreich gesendet!")
         else:
             print(f"Kein Event für heute ({datum_lang}) gefunden.")
 
