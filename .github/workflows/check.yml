@@ -8,17 +8,20 @@ on:
 jobs:
   run-check:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Code laden
-        uses: actions/checkout@v3
+      - name: Repository auschecken
+        uses: actions/checkout@v4
 
-      - name: Python einrichten
-        uses: actions/setup-python@v4
+      - name: Python installieren
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
-      - name: Installieren
-        run: pip install requests beautifulsoup4
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
 
       - name: Skript ausführen
         run: python main.py
