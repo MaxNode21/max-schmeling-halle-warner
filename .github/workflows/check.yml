@@ -3,9 +3,8 @@ name: Parkplatz Checker
 on:
   schedule:
     # 07:00 UTC = 08:00 Uhr Winterzeit (Deutschland)
-    # Im Sommer ist das dann 09:00 Uhr.
     - cron: '0 7 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Für manuellen Start
 
 jobs:
   run-check:
@@ -20,10 +19,8 @@ jobs:
           python-version: '3.9'
 
       - name: Installieren
-        run: pip install requests beautifulsoup4
-
-      - name: Starten
-        run: python main.py
-
-      - name: Installieren
+        # WICHTIG: Hier muss 'pytz' mit dabei stehen!
         run: pip install requests beautifulsoup4 pytz
+
+      - name: Skript ausführen
+        run: python main.py
