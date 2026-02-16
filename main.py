@@ -94,7 +94,7 @@ def check_events():
                 einlass_dt = datetime.strptime(f"{heute_str} {einlass}", "%Y-%m-%d %H:%M")
                 
                 # Alarm-Zeit = Einlass - 2 Stunden
-                alarm_zeit = einlass_dt - timedelta(hours=2)
+                alarm_zeit = datetime.now() + timedelta(minutes=1)
                 
                 # Umrechnen in Unix Timestamp für ntfy
                 timestamp = int(alarm_zeit.timestamp())
