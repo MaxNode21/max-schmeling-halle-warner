@@ -1,0 +1,25 @@
+name: Parkplatz Checker
+
+on:
+  schedule:
+    # Jeden Tag um 06:00 Uhr UTC (Das ist 07:00 oder 08:00 Uhr deutscher Zeit)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Damit du es manuell testen kannst
+
+jobs:
+  run-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code laden
+        uses: actions/checkout@v3
+
+      - name: Python einrichten
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Bibliotheken installieren
+        run: pip install requests beautifulsoup4
+
+      - name: Skript ausführen
+        run: python main.py
