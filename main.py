@@ -11,68 +11,99 @@ def check_events():
     url = "https://www.max-schmeling-halle.de/events-tickets"
     print(f"--- Prüfe {url} ---")
     
-    # Datum von heute
+    # 1. Datum definieren
     heute = datetime.now()
     monate = {1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
               7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember"}
     
     datum_kurz = heute.strftime("%d.%m.%Y")       # 16.02.2026
-    datum_lang = f"{int(heute.strftime('%d'))}. {monate[heute.month]}" # 16. Februar
+    datum_text = f"{int(heute.strftime('%d'))}. {monate[heute.month]}" # 16. Februar
     
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
+        
+        # WICHTIG: Wir nutzen " | " als Trenner. Das hat beim Titel geholfen!
         soup = BeautifulSoup(response.text, 'html.parser')
-        text = soup.get_text(" ", strip=True)
+        full_text = soup.get_text(" | ", strip=True)
 
         gefunden = False
+        gefundene_hashes = set()
         
-        # Wir suchen simpel nach dem Datum
-        suchbegriffe = [datum_kurz, datum_lang]
-        
-        for datum in suchbegriffe:
-            if datum in text:
-                # Datum gefunden -> Es ist ein Event!
-                
-                # Wir suchen im Umkreis nach Uhrzeiten
-                index = text.find(datum)
-                umfeld = text[index:index+400]
-                
-                einlass = "??"
-                beginn = "??"
-                
-                e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", umfeld, re.IGNORECASE)
-                if e_match: einlass = e_match.group(1).replace('.', ':')
-                
-                b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", umfeld, re.IGNORECASE)
-                if b_match: beginn = b_match.group(1).replace('.', ':')
+        # Wir suchen nach dem Datum im Text
+        # Wir nehmen das Datum, das zuerst gefunden wird.
+        for match in re.finditer(re.escape(datum_kurz), full_text):
+            found_idx = match.start()
+            
+            # 2. Großzügigen Text-Ausschnitt holen (damit finden wir auch die Zeiten wieder!)
+            # Wir schauen 300 Zeichen zurück (Titel) und 500 Zeichen vor (Zeiten)
+            start_pos = max(0, found_idx - 300)
+            end_pos = min(len(full_text), found_idx + 500)
+            ausschnitt = full_text[start_pos:end_pos]
+            
+            # --- TEIL A: ZEITEN FINDEN (Wie um 22:10 Uhr) ---
+            einlass = "??"
+            beginn = "??"
+            
+            # Robuste Suche nach Uhrzeiten
+            e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+            if e_match: einlass = e_match.group(1).replace('.', ':')
+            
+            b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+            if b_match: beginn = b_match.group(1).replace('.', ':')
 
-                # NACHRICHT SENDEN
-                # Statt dem Titel senden wir einfach den Link!
-                nachricht = f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr\n\n👉 Wer spielt? Hier klicken:\n{url}"
+            # --- TEIL B: TITEL FINDEN (Wie um 22:17 Uhr) ---
+            # Wir schneiden alles ab dem Datum ab. Der Titel steht davor.
+            parts = ausschnitt.split(datum_kurz)
+            if len(parts) > 0:
+                text_davor = parts[0]
+                titel_teile = text_davor.split("|")
                 
-                requests.post(
-                    f"https://ntfy.sh/{KANAL_NAME}",
-                    data=nachricht.encode('utf-8'),
-                    headers={
-                        "Title": "🚗 Parkplatz-Alarm!", # Immer gleicher Titel
-                        "Priority": "high",
-                        "Tags": "car,traffic_light",
-                        "Click": url # Wenn er auf die Nachricht tippt, öffnet sich die Webseite
-                    }
-                )
+                # Wir suchen rückwärts nach dem Titel
+                titel = "Event heute"
+                for teil in reversed(titel_teile):
+                    teil = teil.strip()
+                    # Filter: Ignoriere Wochentage oder leeres Zeug
+                    if len(teil) > 3 and "Montag" not in teil and "Dienstag" not in teil and "Mittwoch" not in teil:
+                        titel = teil
+                        break
                 
-                gefunden = True
-                print("Event gemeldet.")
-                break # Einmal melden reicht
+                # Kürzen, falls viel zu lang
+                if len(titel) > 60: titel = titel[:57] + "..."
+            else:
+                titel = "Event heute"
+
+            # Check: Doppelte verhindern
+            hash_id = f"{titel}-{beginn}"
+            if hash_id in gefundene_hashes: continue
+            gefundene_hashes.add(hash_id)
+            gefunden = True
+            
+            print(f"Gefunden: {titel} -> {beginn}")
+
+            # --- TEIL C: SENDEN (Ohne Emoji im Title Header!) ---
+            # Das Emoji 🚗 kommt in den Body oder Tags, NICHT in den Title-Header (das hat den Crash verursacht)
+            
+            nachricht_body = f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr"
+            
+            requests.post(
+                f"https://ntfy.sh/{KANAL_NAME}",
+                data=nachricht_body.encode('utf-8'),
+                headers={
+                    "Title": titel,       # Nur Text, kein Emoji hier!
+                    "Priority": "high",
+                    "Tags": "car,ticket", # Hier sind die Emojis sicher
+                    "Click": url          # Link zum Anklicken
+                }
+            )
 
         if not gefunden:
-            print("Heute kein Event.")
+            print("Nichts gefunden.")
 
     except Exception as e:
         print(f"Fehler: {e}")
-        # Fehler melden, damit man weiß, was los ist
-        requests.post(f"https://ntfy.sh/{KANAL_NAME}", data=f"Fehler: {e}", headers={"Title": "Skript Fehler"})
+        # Fehler melden
+        requests.post(f"https://ntfy.sh/{KANAL_NAME}", data=f"Fehler: {e}", headers={"Title": "Skript Error"})
 
 if __name__ == "__main__":
     check_events()
