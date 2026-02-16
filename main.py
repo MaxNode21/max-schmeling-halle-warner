@@ -2,106 +2,106 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
+import sys
 
-# --- KONFIGURATION ---
+# --- DEIN KANAL ---
 KANAL_NAME = "max-schmeling-halle-warner"
-TEST_MODUS = True   # <--- WICHTIG: Erst True lassen zum Testen!
-# ---------------------
+# ------------------
+
+def send_to_handy(titel, text, tags="warning"):
+    """Hilfsfunktion: Sendet garantiert eine Nachricht"""
+    try:
+        requests.post(
+            f"https://ntfy.sh/{KANAL_NAME}",
+            data=text.encode('utf-8'),
+            headers={
+                "Title": titel,
+                "Priority": "high",
+                "Tags": tags
+            }
+        )
+    except:
+        pass
 
 def check_events():
-    url = "https://www.max-schmeling-halle.de/events-tickets"
-    print(f"--- Prüfe {url} ---")
-    
-    # 1. Datum bestimmen
-    heute = datetime.now()
-    monate = {1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
-              7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember"}
-    
-    # Such-Strings: "16.02.2026" und "16. Februar"
-    datum_kurz = heute.strftime("%d.%m.%Y")
-    datum_lang = f"{int(heute.strftime('%d'))}. {monate[heute.month]}"
-    
+    print("Starte Check...")
     try:
+        url = "https://www.max-schmeling-halle.de/events-tickets"
+        
+        # 1. Webseite laden
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
-        # WICHTIG: Wir holen den rohen Text mit Trennzeichen, damit nichts zusammenklebt
+        response.raise_for_status() # Bricht ab, wenn Webseite down ist
+        
+        # Text holen
         soup = BeautifulSoup(response.text, 'html.parser')
         full_text = soup.get_text(" | ", strip=True)
 
-        gefunden = False
-        gefundene_hashes = set()
+        # 2. Datum suchen
+        heute = datetime.now()
+        monate = {1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
+                  7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember"}
         
-        # Wir suchen nach dem Datum im gesamten Text (das hat um 22:10 Uhr funktioniert!)
-        # Wir nehmen das Datum, das zuerst gefunden wird.
-        for match in re.finditer(re.escape(datum_kurz), full_text):
-            found_idx = match.start()
-            
-            # 2. Text-Ausschnitt holen (Großzügig: 300 Zeichen davor, 500 danach)
-            # Damit erwischen wir Titel (davor) und Uhrzeiten (danach) sicher.
-            start_pos = max(0, found_idx - 300)
-            end_pos = min(len(full_text), found_idx + 500)
-            ausschnitt = full_text[start_pos:end_pos]
-            
-            # Debug-Ausgabe im Log sehen
-            # print(f"Prüfe Ausschnitt: {ausschnitt[:50]}...")
-
-            # 3. UHRZEITEN FINDEN (Robuste Regex-Suche im Ausschnitt)
-            einlass = "??"
-            beginn = "??"
-            
-            # Suche nach Uhrzeit-Mustern (HH:MM)
-            e_match = re.search(r"Einlass.*?(\d{1,2}:\d{2})", ausschnitt, re.IGNORECASE)
-            if e_match: einlass = e_match.group(1)
-            
-            b_match = re.search(r"Beginn.*?(\d{1,2}:\d{2})", ausschnitt, re.IGNORECASE)
-            if b_match: beginn = b_match.group(1)
-
-            # 4. TITEL FINDEN (Alles VOR dem Datum im Ausschnitt)
-            # Wir splitten den Ausschnitt am Datum. Der Teil davor ist der Titel.
-            parts = ausschnitt.split(datum_kurz)
-            if len(parts) > 0:
-                text_davor = parts[0]
-                # Wir nehmen das letzte Stück Text vor dem Datum (getrennt durch |)
-                titel_teile = text_davor.split("|")
-                # Nimm das letzte Element, das lang genug ist (um "Montag" etc. zu überspringen)
-                titel = "Event"
-                for teil in reversed(titel_teile):
-                    teil = teil.strip()
-                    # Ignoriere Wochentage oder leeren Kram
-                    if len(teil) > 3 and "Montag" not in teil and "Dienstag" not in teil:
-                        titel = teil
-                        break
+        datum_kurz = heute.strftime("%d.%m.%Y")       # 16.02.2026
+        datum_text = f"{int(heute.strftime('%d'))}. {monate[heute.month]}" # 16. Februar
+        
+        gefunden = False
+        
+        # Wir suchen nach BEIDEN Datums-Varianten
+        suchbegriffe = [datum_kurz, datum_text]
+        
+        for datum in suchbegriffe:
+            if datum in full_text:
+                # Datum gefunden! Jetzt suchen wir die Details in der Nähe.
+                found_idx = full_text.find(datum)
                 
-                # Titel säubern
-                if len(titel) > 50: titel = titel[:47] + "..."
-            else:
-                titel = "Event"
+                # Wir schneiden uns ein Stück Text aus (300 Zeichen davor und danach)
+                start = max(0, found_idx - 300)
+                end = min(len(full_text), found_idx + 400)
+                ausschnitt = full_text[start:end]
+                
+                # UHRZEITEN FINDEN
+                einlass = "??"
+                beginn = "??"
+                
+                # Suche nach Uhrzeiten (Muster: 18:00 oder 19.30)
+                e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+                if e_match: einlass = e_match.group(1).replace('.', ':')
+                
+                b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+                if b_match: beginn = b_match.group(1).replace('.', ':')
 
-            # Check: Haben wir das Event schon?
-            hash_id = f"{titel}-{beginn}"
-            if hash_id in gefundene_hashes: continue
-            gefundene_hashes.add(hash_id)
-            gefunden = True
-            
-            print(f"Treffer: {titel} | Einlass: {einlass} | Beginn: {beginn}")
+                # TITEL FINDEN (Der Text VOR dem Datum)
+                teile = ausschnitt.split(datum)
+                text_davor = teile[0]
+                # Wir nehmen die letzten Worte vor dem Datum als Titel
+                worte = text_davor.split("|")
+                titel = "Event heute"
+                if len(worte) >= 2:
+                    # Nimm das vorletzte Element, das ist meist der Titel
+                    kandidat = worte[-1].strip()
+                    if len(kandidat) < 3: kandidat = worte[-2].strip()
+                    titel = kandidat
+                
+                if len(titel) > 40: titel = titel[:37] + "..."
 
-            # 5. VERZÖGERUNG BERECHNEN
-            delay_str = ""
-            tag = "ticket"
-            
-            if TEST_MODUS:
-                print("Test-Modus aktiv: Sende sofort.")
-            elif einlass != "??":
-                # Einfache Rechnung (UTC+1 Winterzeit Annahme)
-                try:
-                    utc_now = datetime.utcnow()
-                    de_hour = utc_now.hour + 1 # Winterzeit
-                    
-                    h_einlass = int(einlass.split(':')[0])
-                    m_einlass = int(einlass.split(':')[1])
-                    
-                    min_now = de_hour * 60 + utc_now.minute
-                    min_einlass = h_einlass * 60 + m_einlass
-                    
-                    # 120 Minuten vorher warnen
-                    wait_min = min_einlass
+                # Nachricht senden!
+                msg = f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr"
+                send_to_handy(f"Heute: {titel}", msg, "ticket")
+                gefunden = True
+                break # Nur das erste Event melden (verhindert Spam)
+
+        if not gefunden:
+            print("Kein Event gefunden.")
+            # Optional: Sende Nachricht, dass Skript lief (zum Testen)
+            # send_to_handy("Status OK", "Kein Event heute gefunden.", "white_check_mark")
+
+    except Exception as e:
+        # HIER IST DER RETTER: Wenn was schief geht, sendet er den Fehler ans Handy!
+        error_msg = str(e)
+        print(f"CRASH: {error_msg}")
+        send_to_handy("Skript Fehler ⚠️", f"Hilfe, ich bin abgestürzt:\n{error_msg}", "rotating_light")
+        sys.exit(1) # Markiert den Run bei GitHub als rot
+
+if __name__ == "__main__":
+    check_events()
