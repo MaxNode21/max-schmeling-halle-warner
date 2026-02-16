@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 KANAL_NAME = "max-schmeling-halle-warner"
@@ -20,57 +20,71 @@ def send_notification(title, body):
     )
 
 
+def categorize_event(titel):
+    t = titel.lower()
+
+    if any(w in t for w in ["vs", "füchse", "handball", "spiel"]):
+        return f"Sport: {titel}"
+    elif any(w in t for w in ["tour", "live", "konzert"]):
+        return f"Konzert: {titel}"
+    else:
+        return f"Event: {titel}"
+
+
 def check_events():
-    print(f"Prüfe {URL}")
+    print("Starte Prüfung...")
 
-    heute = datetime.now()
-    datum_kurz = heute.strftime("%d.%m.%Y")
-
-    monate = {
-        1: "Januar", 2: "Februar", 3: "März", 4: "April",
-        5: "Mai", 6: "Juni", 7: "Juli", 8: "August",
-        9: "September", 10: "Oktober",
-        11: "November", 12: "Dezember"
-    }
-
-    datum_text = f"{int(heute.strftime('%d'))}. {monate[heute.month]}"
+    now = datetime.now()
 
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-
         response = requests.get(URL, headers=headers, timeout=15)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
         full_text = soup.get_text(" | ", strip=True)
 
-        gefunden = False
-        gefundene_hashes = set()
+        events_checked = set()
 
-        for date_pattern in [datum_kurz, datum_text]:
-            for match in re.finditer(re.escape(date_pattern), full_text):
+        # Suche nach allen Datumsangaben im Format DD.MM.YYYY
+        date_matches = re.finditer(r"\d{2}\.\d{2}\.\d{4}", full_text)
 
-                found_idx = match.start()
+        for match in date_matches:
+            datum_str = match.group()
 
-                start_pos = max(0, found_idx - 300)
-                end_pos = min(len(full_text), found_idx + 500)
-                ausschnitt = full_text[start_pos:end_pos]
+            try:
+                event_date = datetime.strptime(datum_str, "%d.%m.%Y")
+            except:
+                continue
 
-                # Zeiten suchen
-                einlass = "?"
-                beginn = "?"
+            found_idx = match.start()
+            start_pos = max(0, found_idx - 300)
+            end_pos = min(len(full_text), found_idx + 500)
+            ausschnitt = full_text[start_pos:end_pos]
 
-                e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
-                if e_match:
-                    einlass = e_match.group(1).replace(".", ":")
+            # Einlasszeit suchen
+            e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+            if not e_match:
+                continue
 
-                b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
-                if b_match:
-                    beginn = b_match.group(1).replace(".", ":")
+            einlass_str = e_match.group(1).replace(".", ":")
+
+            try:
+                einlass_time = datetime.strptime(einlass_str, "%H:%M").time()
+            except:
+                continue
+
+            # Kombiniere Datum + Einlasszeit
+            event_datetime = datetime.combine(event_date.date(), einlass_time)
+
+            reminder_time = event_datetime - timedelta(hours=2)
+
+            # Nur wenn jetzt im 15-Minuten-Fenster
+            if reminder_time <= now <= reminder_time + timedelta(minutes=15):
 
                 # Titel finden
-                parts = ausschnitt.split(date_pattern)
-                titel = "Event heute"
+                parts = ausschnitt.split(datum_str)
+                titel = "Event"
 
                 if len(parts) > 0:
                     text_davor = parts[0]
@@ -78,7 +92,6 @@ def check_events():
 
                     for teil in reversed(titel_teile):
                         teil = teil.strip()
-
                         if (
                             len(teil) > 5 and
                             not any(w in teil for w in [
@@ -91,30 +104,23 @@ def check_events():
                             titel = teil
                             break
 
-                if len(titel) > 80:
-                    titel = titel[:77] + "..."
+                titel = categorize_event(titel)
 
-                # Handball erkennen
-                if "vs" in titel or "Füchse" in titel:
-                    titel = f"Handball: {titel}"
-                else:
-                    titel = f"Konzert/Event: {titel}"
+                hash_id = f"{titel}-{event_datetime}"
 
-                hash_id = f"{titel}-{beginn}"
-                if hash_id in gefundene_hashes:
+                if hash_id in events_checked:
                     continue
 
-                gefundene_hashes.add(hash_id)
-                gefunden = True
+                events_checked.add(hash_id)
 
-                print(f"Gefunden: {titel} ({beginn})")
+                body = (
+                    f"📅 Datum: {event_datetime.strftime('%d.%m.%Y')}\n"
+                    f"🚪 Einlass: {einlass_str} Uhr\n"
+                    f"⏰ Beginn in 2 Stunden!"
+                )
 
-                body = f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr"
-
+                print(f"Sende Erinnerung für: {titel}")
                 send_notification(titel, body)
-
-        if not gefunden:
-            print("Heute kein Event gefunden.")
 
     except Exception as e:
         print(f"Fehler: {e}")
