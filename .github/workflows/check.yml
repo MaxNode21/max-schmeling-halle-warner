@@ -24,3 +24,6 @@ jobs:
 
       - name: Starten
         run: python main.py
+
+      - name: Installieren
+        run: pip install requests beautifulsoup4 pytz
