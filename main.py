@@ -1,133 +1,136 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
-import math
 
 # --- KONFIGURATION ---
 KANAL_NAME = "max-schmeling-halle-warner"
-TEST_MODUS = True  # <--- WICHTIG: Zum Testen auf True lassen. 
-                   # Wenn der Text auf dem Handy PERFEKT ist, auf False stellen!
+TEST_MODUS = True   # <--- Lass das auf True, bis die erste Nachricht sauber ankam!
 # ---------------------
 
 def check_events():
     url = "https://www.max-schmeling-halle.de/events-tickets"
     print(f"--- Prüfe {url} ---")
-
-    # Datum vorbereiten
+    
+    # Datum bestimmen
     heute = datetime.now()
     monate = {1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
               7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember"}
     
-    # Wir suchen nach "16.02.2026" und "16. Februar"
-    datum_kurz = heute.strftime("%d.%m.%Y")
-    datum_lang = f"{int(heute.strftime('%d'))}. {monate[heute.month]}"
-    
+    datum_kurz = heute.strftime("%d.%m.%Y")       # z.B. 16.02.2026
+    datum_text = f"{int(heute.strftime('%d'))}. {monate[heute.month]}" # z.B. 16. Februar
+    jahr = str(heute.year)
+
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # TRICK: Wir nutzen ein Trennzeichen "|", damit Titel und Datum nicht zusammenkleben
-        text_full = soup.get_text(" | ", strip=True)
-
         gefunden = False
         gefundene_hashes = set()
 
-        # Wir suchen nach dem Datum im ganzen Text
-        # finditer findet alle Events des Tages
-        for match in re.finditer(re.escape(datum_kurz), text_full):
-            found_index = match.start()
-            
-            # Wir schauen uns den Text Umkreis an (200 Zeichen davor, 400 danach)
-            umfeld_start = max(0, found_index - 200)
-            umfeld_ende = min(len(text_full), found_index + 400)
-            umfeld = text_full[umfeld_start:umfeld_ende]
-
-            # 1. ZEITEN FINDEN (Robust!)
-            einlass = "??"
-            beginn = "??"
-            
-            e_match = re.search(r"Einlass.*?(\d{1,2}:\d{2})", umfeld, re.IGNORECASE)
-            if e_match: einlass = e_match.group(1)
-            
-            b_match = re.search(r"Beginn.*?(\d{1,2}:\d{2})", umfeld, re.IGNORECASE)
-            if b_match: beginn = b_match.group(1)
-
-            # 2. TITEL RATEN (Wir nehmen den Textteil VOR dem Datum)
-            # Das Datum steht im 'umfeld' etwa bei Index 200. Wir schauen davor.
-            # Wir suchen nach dem Stück Text zwischen dem letzten "|" und dem Datum.
-            teil_vor_datum = umfeld[:200].split("|")
-            
-            # Der Titel ist meistens das letzte oder vorletzte Element vor dem Datum
-            titel = "Event"
-            if len(teil_vor_datum) >= 2:
-                moglicher_titel = teil_vor_datum[-1].strip()
-                # Wenn das nur Müll ist (zu kurz), nehmen wir das davor
-                if len(moglicher_titel) < 3:
-                    moglicher_titel = teil_vor_datum[-2].strip()
+        # Wir suchen direkt nach dem Text "16. Februar" (oder aktuelles Datum)
+        # und hangeln uns von dort zum Event-Container.
+        suchbegriffe = [datum_text, datum_kurz]
+        
+        for suchwort in suchbegriffe:
+            for element in soup.find_all(string=re.compile(re.escape(suchwort))):
                 
-                # Datum aus Titel entfernen, falls es noch drin hängt
-                titel = moglicher_titel.replace(datum_kurz, "").replace(datum_lang, "").strip()
-            
-            if len(titel) > 40: titel = titel[:37] + "..." # Kürzen wenn zu lang
+                # Gehe 3 Ebenen hoch, um den ganzen Kasten zu finden
+                container = element.parent.parent.parent
+                if not container: continue
+                
+                # WICHTIG: separator=" " verhindert "TitelDatum"-Salat!
+                text_sauber = container.get_text(" ", strip=True)
+                
+                # Prüfen, ob das Datum wirklich drin ist (zur Sicherheit)
+                if suchwort not in text_sauber:
+                    continue
 
-            # Doppelte verhindern
-            event_hash = f"{titel}-{beginn}"
-            if event_hash in gefundene_hashes: continue
-            gefundene_hashes.add(event_hash)
-            gefunden = True
+                # 1. ZEITEN FINDEN
+                einlass = "??"
+                beginn = "??"
+                
+                e_match = re.search(r"Einlass.*?(\d{1,2}:\d{2})", text_sauber, re.IGNORECASE)
+                if e_match: einlass = e_match.group(1)
+                
+                b_match = re.search(r"Beginn.*?(\d{1,2}:\d{2})", text_sauber, re.IGNORECASE)
+                if b_match: beginn = b_match.group(1)
 
-            print(f"Gefunden: {titel} | Einlass: {einlass} | Beginn: {beginn}")
+                # 2. TITEL ISOLIEREN
+                # Wir nehmen den Text und schneiden alles ab dem Datum ab.
+                # Meistens steht der Titel VOR dem Datum.
+                parts = text_sauber.split(suchwort)
+                titel_roh = parts[0] # Alles vor dem Datum
+                
+                # Den Titel noch etwas säubern (Wochentage etc. entfernen)
+                titel = titel_roh.replace("Montag,", "").replace("Dienstag,", "").replace("Mittwoch,", "").replace("Donnerstag,", "").replace("Freitag,", "").replace("Samstag,", "").replace("Sonntag,", "").strip()
+                
+                # Falls Titel leer oder zu kurz, Fallback
+                if len(titel) < 5:
+                    titel = "Event in der Halle"
 
-            # 3. VERZÖGERUNG BERECHNEN (Ohne pytz, einfache Mathematik)
-            delay_text = ""
-            tag = "ticket" # Standard Icon
-            
+                if len(titel) > 50: titel = titel[:47] + "..."
+
+                # Doppelte verhindern
+                hash_id = f"{titel}-{beginn}"
+                if hash_id in gefundene_hashes: continue
+                gefundene_hashes.add(hash_id)
+                gefunden = True
+                
+                print(f"Gefunden: {titel} | {beginn}")
+
+                # 3. VERZÖGERUNG BERECHNEN (Simpel)
+                delay_str = ""
+                tag = "ticket"
+                
+                if TEST_MODUS:
+                    print("Test-Modus: Sende sofort.")
+                elif einlass != "??":
+                    # Einfache Rechnung: Einlass-Stunde + 1 (für Winterzeit DE) - 2 Std Puffer
+                    # Wir nutzen UTC vom Server.
+                    utc_now = datetime.utcnow()
+                    de_hour = utc_now.hour + 1 # Winterzeit! (+2 im Sommer)
+                    
+                    h_einlass = int(einlass.split(':')[0])
+                    m_einlass = int(einlass.split(':')[1])
+                    
+                    # Minuten seit Tagesbeginn
+                    min_now = de_hour * 60 + utc_now.minute
+                    min_einlass = h_einlass * 60 + m_einlass
+                    
+                    # Alarm in Minuten (Einlass - Jetzt - 120 Min Puffer)
+                    wait_min = min_einlass - min_now - 120
+                    
+                    if wait_min > 0:
+                        delay_str = f"{wait_min}m"
+                        tag = "clock"
+                        print(f"Verzögerung: {wait_min} Minuten")
+
+                # 4. SENDEN
+                requests.post(
+                    f"https://ntfy.sh/{KANAL_NAME}",
+                    data=f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr".encode('utf-8'),
+                    headers={
+                        "Title": titel,
+                        "Priority": "high",
+                        "Tags": tag,
+                        "Delay": delay_str
+                    }
+                )
+
+        if not gefunden:
+            print("Nichts gefunden.")
+            # Damit du weißt, dass das Skript überhaupt lief:
             if TEST_MODUS:
-                print(" -> TEST: Sende sofort")
-            elif einlass != "??":
-                # Wir rechnen: Einlass (z.B. 18:00) minus Jetzt (z.B. 08:00) minus 2 Std Puffer
-                h_einlass, m_einlass = map(int, einlass.split(':'))
-                
-                # Aktuelle Stunde in Deutschland (Server ist UTC, DE ist UTC+1 im Winter)
-                # Wir machen es einfach: Wir nutzen die Serverzeit und rechnen +1 Stunde drauf
-                jetzt_utc = datetime.utcnow()
-                jetzt_de_stunde = jetzt_utc.hour + 1 
-                
-                # Minuten bis zum Einlass
-                minuten_bis_einlass = (h_einlass * 60 + m_einlass) - (jetzt_de_stunde * 60 + jetzt_utc.minute)
-                
-                # Wir wollen 2 Stunden (120 Min) VORHER warnen
-                minuten_delay = minuten_bis_einlass - 120
-                
-                if minuten_delay > 0:
-                    delay_text = f"{minuten_delay}m"
-                    tag = "clock" # Uhr Icon für geplante Nachricht
-                    print(f" -> Verzögerung: {minuten_delay} Minuten")
-                else:
-                    print(" -> Zu spät für Verzögerung, sende sofort.")
-
-            # 4. NACHRICHT SENDEN (Kurz & Knapp)
-            # Nachricht: "Titel (Start: 19:30)"
-            # Body: "Einlass: 18:00"
-            
-            requests.post(
-                f"https://ntfy.sh/{KANAL_NAME}",
-                data=f"Einlass: {einlass} Uhr\nBeginn: {beginn} Uhr".encode('utf-8'),
-                headers={
-                    "Title": f"{titel}", # Nur der Titel oben
-                    "Priority": "high",
-                    "Tags": tag,
-                    "Delay": delay_text
-                }
-            )
+                requests.post(f"https://ntfy.sh/{KANAL_NAME}", 
+                              data="Skript lief erfolgreich durch, aber heute ist kein Event.".encode('utf-8'),
+                              headers={"Title": "Check OK (Kein Event)"})
 
     except Exception as e:
         print(f"Fehler: {e}")
-        # Nur im Testmodus Fehler senden
         if TEST_MODUS:
-             requests.post(f"https://ntfy.sh/{KANAL_NAME}", data=f"Fehler: {e}", headers={"Title": "Skript Fehler"})
+            requests.post(f"https://ntfy.sh/{KANAL_NAME}", data=f"Fehler: {e}", headers={"Title": "Skript Error"})
 
 if __name__ == "__main__":
     check_events()
