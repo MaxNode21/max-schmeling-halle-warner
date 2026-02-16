@@ -19,7 +19,6 @@ jobs:
 
       - name: Installieren
         run: pip install requests beautifulsoup4
-        # HIER DARF KEIN 'pytz' STEHEN!
 
       - name: Skript ausführen
         run: python main.py
