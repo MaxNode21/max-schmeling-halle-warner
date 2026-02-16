@@ -1,15 +1,17 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 import time
 
-# --- DEIN KANAL ---
+# --- KONFIGURATION ---
 KANAL_NAME = "max-schmeling-halle-warner"
-# ------------------
+TEST_MODUS = True  # <--- HIER: Auf True setzen zum Testen (sofortige Nachricht)
+                   # <--- HIER: Auf False setzen für den echten Betrieb (2 Std vorher)
+# ---------------------
 
-def get_today_date_strings():
-    """Gibt das heutige Datum in verschiedenen Formaten zurück"""
+def get_german_date():
+    """Erzeugt Datum-Strings für die Suche"""
     heute = datetime.now()
     monate = {
         1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
@@ -17,114 +19,125 @@ def get_today_date_strings():
     }
     return [
         heute.strftime("%d.%m.%Y"),         # 16.02.2026
-        f"{heute.day}. {monate[heute.month]}" # 16. Februar
+        f"{int(heute.strftime('%d'))}. {monate[heute.month]} {heute.year}" # 16. Februar 2026
     ]
-
-def parse_time(text):
-    """Sucht nach einer Uhrzeit im Text (HH:MM)"""
-    match = re.search(r"(\d{1,2}:\d{2})", text)
-    if match:
-        return match.group(1)
-    return None
 
 def check_events():
     url = "https://www.max-schmeling-halle.de/events-tickets"
     print(f"--- Prüfe {url} ---")
-    
+    print(f"Modus: {'TEST (Sofort)' if TEST_MODUS else 'LIVE (Verzögert)'}")
+
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Wir suchen nach Containern, die Events sein könnten.
-        # Da wir die genaue Klasse nicht kennen, suchen wir nach dem Datum
-        # und gehen dann zum "Eltern-Element" hoch.
-        
-        datums_formate = get_today_date_strings()
-        gefundene_events_hashes = set() # Um Doppelte zu vermeiden
+        text = soup.get_text(" ", strip=True) # Robuste Textsuche
 
-        found_something = False
+        date_strings = get_german_date()
+        gefunden_hashes = set()
+        
+        found_any = False
 
-        for datum_str in datums_formate:
-            # Finde alle Textelemente, die das Datum enthalten
-            for element in soup.find_all(string=re.compile(re.escape(datum_str))):
+        for datum in date_strings:
+            # Suche alle Vorkommen des Datums
+            for match in re.finditer(re.escape(datum), text):
                 
-                # Wir klettern im HTML-Baum hoch, um den ganzen Event-Kasten zu finden
-                # Meistens ist es ein <div> oder <a> oder <article>
-                container = element.find_parent("div") 
-                if not container:
+                # Umfeld analysieren (300 Zeichen danach)
+                start = match.start()
+                umfeld = text[start:start+400]
+                
+                # Uhrzeiten extrahieren
+                beginn_match = re.search(r"Beginn[:\s]*(\d{1,2}:\d{2})", umfeld, re.IGNORECASE)
+                einlass_match = re.search(r"Einlass[:\s]*(\d{1,2}:\d{2})", umfeld, re.IGNORECASE)
+                
+                start_zeit = beginn_match.group(1) if beginn_match else "??"
+                einlass_zeit = einlass_match.group(1) if einlass_match else "??"
+                
+                # Titel raten: Wir nehmen einfach die 50 Zeichen VOR dem Datum als Titel-Hinweis
+                # oder kurz nach dem Datum, falls davor nichts Sinnvolles steht.
+                # Simpler Fallback für die Nachricht:
+                titel_info = "Event" 
+
+                # Hash um Doppelte zu vermeiden (nur Zeitbasiert)
+                event_hash = f"{start_zeit}-{einlass_zeit}"
+                if event_hash in gefunden_hashes:
                     continue
+                gefunden_hashes.add(event_hash)
+                found_any = True
+
+                print(f"Gefunden! Beginn: {start_zeit}, Einlass: {einlass_zeit}")
+
+                # --- VERZÖGERUNG BERECHNEN ---
+                delay_header = ""
                 
-                text_block = container.get_text(" ", strip=True)
-                
-                # 1. TITEL FINDEN
-                # Wir suchen nach Überschriften im Container (h2, h3, h4)
-                titel_tag = container.find(['h2', 'h3', 'h4', 'strong'])
-                if titel_tag:
-                    titel = titel_tag.get_text(strip=True)
+                if TEST_MODUS:
+                    print("  -> Test-Modus: Sende sofort!")
+                    msg_prefix = "[TEST] "
                 else:
-                    # Fallback: Die ersten 40 Zeichen des Containers
-                    titel = text_block[:40] + "..."
+                    msg_prefix = ""
+                    # Wenn wir eine Einlasszeit haben, rechnen wir!
+                    if einlass_zeit != "??":
+                        # Wir nehmen an, die Webseite zeigt deutsche Zeit.
+                        # Wir müssen das in einen Unix-Timestamp wandeln.
+                        
+                        uhr_h, uhr_m = map(int, einlass_zeit.split(':'))
+                        jetzt = datetime.now()
+                        
+                        # Event-Zeitpunkt erstellen (Naive)
+                        event_dt = jetzt.replace(hour=uhr_h, minute=uhr_m, second=0, microsecond=0)
+                        
+                        # Alarm = 2 Stunden vorher
+                        alarm_dt = event_dt - timedelta(hours=2)
+                        
+                        # Zeitzonen-Korrektur: 
+                        # GitHub läuft auf UTC. Deutschland ist UTC+1 (Winter) oder UTC+2 (Sommer).
+                        # Das Skript liest "18:00" -> interpretiert als 18:00 UTC (falsch).
+                        # Wir müssen also 1 Stunde abziehen, damit der Timestamp stimmt?
+                        # Einfacher Trick: Wir berechnen die Differenz in Sekunden und nutzen "Delay: Xs"
+                        
+                        # Da "jetzt" auf dem Server UTC ist und "event_dt" deutsche Zeit sein soll:
+                        # Wir tun so, als wäre "event_dt" auch UTC, müssen aber den Zeitunterschied (1h) draufrechnen.
+                        # Noch einfacher: ntfy nimmt "Delay: 2h". Wir rechnen die Stunden aus.
+                        
+                        # Aktuelle Serverzeit (UTC)
+                        now_utc = datetime.now(timezone.utc)
+                        # Event Zeit in Deutschland (grob UTC+1 annehmen für Winter)
+                        # Wir bauen uns ein offset-aware datetime für Berlin
+                        berlin_offset = timezone(timedelta(hours=1)) # Winterzeit! (Im Sommer hours=2)
+                        event_berlin = datetime.now(berlin_offset).replace(hour=uhr_h, minute=uhr_m, second=0, microsecond=0)
+                        
+                        # Wann soll der Alarm sein?
+                        alarm_zeit = event_berlin - timedelta(hours=2)
+                        
+                        # Wie viele Sekunden sind es von JETZT bis ALARM?
+                        seconds_left = (alarm_zeit - now_utc).total_seconds()
+                        
+                        if seconds_left > 0:
+                            print(f"  -> Alarm in {int(seconds_left/60)} Minuten geplant ({alarm_zeit})")
+                            delay_header = f"{int(seconds_left)}s"
+                        else:
+                            print("  -> Alarm-Zeit schon vorbei, sende sofort.")
 
-                # 2. UHRZEITEN FINDEN
-                einlass = "17:00" # Fallback, falls nichts gefunden wird
-                beginn = "19:00"
-                
-                # Suche nach "Einlass" im Text
-                einlass_match = re.search(r"Einlass.*?(\d{1,2}:\d{2})", text_block, re.IGNORECASE)
-                if einlass_match:
-                    einlass = einlass_match.group(1)
-                
-                beginn_match = re.search(r"Beginn.*?(\d{1,2}:\d{2})", text_block, re.IGNORECASE)
-                if beginn_match:
-                    beginn = beginn_match.group(1)
-
-                # Doppelungen vermeiden (gleicher Titel + gleiche Zeit)
-                event_hash = f"{titel}-{einlass}"
-                if event_hash in gefundene_events_hashes:
-                    continue
-                gefundene_events_hashes.add(event_hash)
-                found_something = True
-
-                print(f"Gefunden: {titel} (Einlass: {einlass})")
-
-                # 3. VERZÖGERUNG BERECHNEN (2 Stunden vor Einlass)
-                # Wir bauen ein echtes Zeit-Objekt für heute
-                heute_str = datetime.now().strftime("%Y-%m-%d")
-                einlass_dt = datetime.strptime(f"{heute_str} {einlass}", "%Y-%m-%d %H:%M")
-                
-                # Alarm-Zeit = Einlass - 2 Stunden
-                alarm_zeit = datetime.now() + timedelta(minutes=1)
-                
-                # Umrechnen in Unix Timestamp für ntfy
-                timestamp = int(alarm_zeit.timestamp())
-                
-                # Falls der Alarm in der Vergangenheit wäre (z.B. Skript läuft erst um 9, Einlass war 8),
-                # senden wir sofort (kein Delay).
-                jetzt = int(time.time())
-                delay_header = str(timestamp)
-                if timestamp < jetzt:
-                    print("  -> Zeit schon vorbei, sende sofort.")
-                    delay_header = "" # Leer lassen = sofort senden
-
-                # 4. NACHRICHT SENDEN
-                nachricht = f"Bald geht's los: {titel}\nEinlass: {einlass} Uhr\nBeginn: {beginn} Uhr"
-                
-                print(f"  -> Plane Benachrichtigung für {alarm_zeit.strftime('%H:%M')} Uhr")
+                # Nachricht bauen
+                nachricht = f"{msg_prefix}Bald geht's los! 🎤\nEinlass: {einlass_zeit} Uhr\nBeginn: {start_zeit} Uhr"
                 
                 requests.post(
                     f"https://ntfy.sh/{KANAL_NAME}",
                     data=nachricht.encode('utf-8'),
                     headers={
-                        "Title": f"Heute: {titel} 🎤",
+                        "Title": f"Event heute: {start_zeit} Uhr",
                         "Priority": "high",
                         "Tags": "ticket,music",
-                        "Delay": delay_header  # <--- HIER IST DER TRICK!
+                        "Delay": delay_header
                     }
                 )
 
-        if not found_something:
-            print("Heute keine Events gefunden.")
+        if not found_any:
+            print(f"Keine Events für heute ({date_strings[0]}) gefunden.")
+            # Optional für Test:
+            if TEST_MODUS:
+                print("Test-Modus aktiv: Sende trotzdem eine 'Kein Event' Nachricht zum Prüfen.")
+                requests.post(f"https://ntfy.sh/{KANAL_NAME}", data="Test erfolgreich: Skript läuft, aber heute ist kein Event.".encode('utf-8'), headers={"Title": "Test OK"})
 
     except Exception as e:
         print(f"Fehler: {e}")
