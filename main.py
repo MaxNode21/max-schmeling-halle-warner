@@ -58,7 +58,7 @@ def check_events():
                 break # Wenn gefunden, hören wir auf zu suchen
 
         if gefunden:
-            nachricht = f"Heute Event! 🎤\n{details}\n(Ende unbekannt)"
+            nachricht = f"Heute Event! 🎤\n{details}"
             print(f"Sende: {nachricht}")
             
             requests.post(
