@@ -2,9 +2,10 @@ name: Parkplatz Checker
 
 on:
   schedule:
-    # Jeden Tag um 06:00 Uhr UTC (Das ist 07:00 oder 08:00 Uhr deutscher Zeit)
-    - cron: '0 6 * * *'
-  workflow_dispatch: # Damit du es manuell testen kannst
+    # 07:00 UTC = 08:00 Uhr Winterzeit (Deutschland)
+    # Im Sommer ist das dann 09:00 Uhr.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   run-check:
@@ -18,8 +19,8 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Bibliotheken installieren
+      - name: Installieren
         run: pip install requests beautifulsoup4
 
-      - name: Skript ausführen
+      - name: Starten
         run: python main.py
