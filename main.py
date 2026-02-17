@@ -32,29 +32,36 @@ def categorize_event(titel):
 
 
 def check_events():
-    print("Starte Prüfung...")
+    print("Starte tägliche Prüfung...")
 
     now = datetime.now()
+    heute_str = now.strftime("%d.%m.%Y")
 
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(URL, headers=headers, timeout=15)
-        response.raise_for_status()
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "de-DE,de;q=0.9",
+        })
+
+        response = session.get(URL, timeout=15)
+
+        if response.status_code != 200:
+            raise Exception(f"HTTP Fehler {response.status_code}")
 
         soup = BeautifulSoup(response.text, "html.parser")
         full_text = soup.get_text(" | ", strip=True)
 
-        events_checked = set()
+        gefunden = False
 
-        # Suche nach allen Datumsangaben im Format DD.MM.YYYY
-        date_matches = re.finditer(r"\d{2}\.\d{2}\.\d{4}", full_text)
+        # Alle Datumsangaben suchen
+        for match in re.finditer(r"\d{2}\.\d{2}\.\d{4}", full_text):
 
-        for match in date_matches:
             datum_str = match.group()
 
-            try:
-                event_date = datetime.strptime(datum_str, "%d.%m.%Y")
-            except:
+            # Nur Events von HEUTE
+            if datum_str != heute_str:
                 continue
 
             found_idx = match.start()
@@ -70,57 +77,61 @@ def check_events():
             einlass_str = e_match.group(1).replace(".", ":")
 
             try:
-                einlass_time = datetime.strptime(einlass_str, "%H:%M").time()
+                event_datetime = datetime.strptime(
+                    f"{datum_str} {einlass_str}",
+                    "%d.%m.%Y %H:%M"
+                )
             except:
                 continue
 
-            # Kombiniere Datum + Einlasszeit
-            event_datetime = datetime.combine(event_date.date(), einlass_time)
-
             reminder_time = event_datetime - timedelta(hours=2)
 
-            # Nur wenn jetzt im 15-Minuten-Fenster
-            if reminder_time <= now <= reminder_time + timedelta(minutes=15):
+            # Nur wenn wir VOR dem Reminder-Zeitpunkt sind
+            if now < reminder_time:
+                print("Noch nicht 2 Stunden vorher.")
+                continue
 
-                # Titel finden
-                parts = ausschnitt.split(datum_str)
-                titel = "Event"
+            # Wenn wir bereits nach Einlass sind → ignorieren
+            if now > event_datetime:
+                continue
 
-                if len(parts) > 0:
-                    text_davor = parts[0]
-                    titel_teile = text_davor.split("|")
+            # Titel finden
+            parts = ausschnitt.split(datum_str)
+            titel = "Event"
 
-                    for teil in reversed(titel_teile):
-                        teil = teil.strip()
-                        if (
-                            len(teil) > 5 and
-                            not any(w in teil for w in [
-                                "Montag", "Dienstag", "Mittwoch",
-                                "Donnerstag", "Freitag",
-                                "Samstag", "Sonntag",
-                                "Tickets", "Infos", "Details"
-                            ])
-                        ):
-                            titel = teil
-                            break
+            if len(parts) > 0:
+                text_davor = parts[0]
+                titel_teile = text_davor.split("|")
 
-                titel = categorize_event(titel)
+                for teil in reversed(titel_teile):
+                    teil = teil.strip()
 
-                hash_id = f"{titel}-{event_datetime}"
+                    if (
+                        len(teil) > 5 and
+                        not any(w in teil for w in [
+                            "Montag", "Dienstag", "Mittwoch",
+                            "Donnerstag", "Freitag",
+                            "Samstag", "Sonntag",
+                            "Tickets", "Infos", "Details"
+                        ])
+                    ):
+                        titel = teil
+                        break
 
-                if hash_id in events_checked:
-                    continue
+            titel = categorize_event(titel)
 
-                events_checked.add(hash_id)
+            body = (
+                f"📅 Datum: {datum_str}\n"
+                f"🚪 Einlass: {einlass_str} Uhr\n"
+                f"⏰ Jetzt losfahren!"
+            )
 
-                body = (
-                    f"📅 Datum: {event_datetime.strftime('%d.%m.%Y')}\n"
-                    f"🚪 Einlass: {einlass_str} Uhr\n"
-                    f"⏰ Beginn in 2 Stunden!"
-                )
+            print(f"Sende Erinnerung für: {titel}")
+            send_notification(titel, body)
+            gefunden = True
 
-                print(f"Sende Erinnerung für: {titel}")
-                send_notification(titel, body)
+        if not gefunden:
+            print("Heute keine Erinnerung notwendig.")
 
     except Exception as e:
         print(f"Fehler: {e}")
