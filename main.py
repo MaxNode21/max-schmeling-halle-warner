@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
 
 KANAL_NAME = "max-schmeling-halle-warner"
@@ -32,10 +32,9 @@ def categorize_event(titel):
 
 
 def check_events():
-    print("Starte tägliche Prüfung...")
+    print("Starte Morgen-Check...")
 
-    now = datetime.now()
-    heute_str = now.strftime("%d.%m.%Y")
+    heute = datetime.now().strftime("%d.%m.%Y")
 
     try:
         session = requests.Session()
@@ -53,15 +52,14 @@ def check_events():
         soup = BeautifulSoup(response.text, "html.parser")
         full_text = soup.get_text(" | ", strip=True)
 
-        gefunden = False
+        events_found = False
+        sent_hashes = set()
 
-        # Alle Datumsangaben suchen
         for match in re.finditer(r"\d{2}\.\d{2}\.\d{4}", full_text):
 
             datum_str = match.group()
 
-            # Nur Events von HEUTE
-            if datum_str != heute_str:
+            if datum_str != heute:
                 continue
 
             found_idx = match.start()
@@ -69,31 +67,13 @@ def check_events():
             end_pos = min(len(full_text), found_idx + 500)
             ausschnitt = full_text[start_pos:end_pos]
 
-            # Einlasszeit suchen
+            # Einlass suchen
             e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
-            if not e_match:
-                continue
+            einlass = e_match.group(1).replace(".", ":") if e_match else "Unbekannt"
 
-            einlass_str = e_match.group(1).replace(".", ":")
-
-            try:
-                event_datetime = datetime.strptime(
-                    f"{datum_str} {einlass_str}",
-                    "%d.%m.%Y %H:%M"
-                )
-            except:
-                continue
-
-            reminder_time = event_datetime - timedelta(hours=2)
-
-            # Nur wenn wir VOR dem Reminder-Zeitpunkt sind
-            if now < reminder_time:
-                print("Noch nicht 2 Stunden vorher.")
-                continue
-
-            # Wenn wir bereits nach Einlass sind → ignorieren
-            if now > event_datetime:
-                continue
+            # Beginn suchen
+            b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
+            beginn = b_match.group(1).replace(".", ":") if b_match else "Unbekannt"
 
             # Titel finden
             parts = ausschnitt.split(datum_str)
@@ -120,18 +100,24 @@ def check_events():
 
             titel = categorize_event(titel)
 
+            hash_id = f"{titel}-{beginn}"
+            if hash_id in sent_hashes:
+                continue
+
+            sent_hashes.add(hash_id)
+            events_found = True
+
             body = (
-                f"📅 Datum: {datum_str}\n"
-                f"🚪 Einlass: {einlass_str} Uhr\n"
-                f"⏰ Jetzt losfahren!"
+                f"📅 Heute: {datum_str}\n"
+                f"🚪 Einlass: {einlass} Uhr\n"
+                f"🎬 Beginn: {beginn} Uhr"
             )
 
-            print(f"Sende Erinnerung für: {titel}")
+            print(f"Sende Push für: {titel}")
             send_notification(titel, body)
-            gefunden = True
 
-        if not gefunden:
-            print("Heute keine Erinnerung notwendig.")
+        if not events_found:
+            print("Heute keine Veranstaltungen.")
 
     except Exception as e:
         print(f"Fehler: {e}")
