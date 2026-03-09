@@ -6,7 +6,6 @@ import re
 KANAL_NAME = "max-schmeling-halle-warner"
 URL = "https://www.max-schmeling-halle.de/events-tickets"
 
-
 def send_notification(title, body):
     requests.post(
         f"https://ntfy.sh/{KANAL_NAME}",
@@ -19,7 +18,6 @@ def send_notification(title, body):
         }
     )
 
-
 def categorize_event(titel):
     t = titel.lower()
 
@@ -30,11 +28,27 @@ def categorize_event(titel):
     else:
         return f"Event: {titel}"
 
-
 def check_events():
     print("Starte Morgen-Check...")
 
-    heute = datetime.now().strftime("%d.%m.%Y")
+    # Flexibles Datum für HEUTE berechnen
+    heute = datetime.now()
+    tag = heute.day
+    jahr = heute.year
+    jahr_kurz = heute.strftime("%y")
+    
+    # Deutsche Monatsnamen für das Suchmuster
+    monate = ["", "Januar", "Februar", "März", "April", "Mai", "Juni", 
+              "Juli", "August", "September", "Oktober", "November", "Dezember"]
+    monate_kurz = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", 
+                   "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+    
+    monat_name = monate[heute.month]
+    monat_kurz = monate_kurz[heute.month]
+    monat_zahl = heute.month
+    
+    # Baut ein flexibles Suchmuster für "Heute" (z.B. "09.03.2026", "9. März 2026", "09 Mär 26", "09.03.")
+    regex_heute = rf"0?{tag}\.?\s*(?:0?{monat_zahl}|{monat_name}|{monat_kurz})\.?\s*(?:{jahr}|{jahr_kurz})?"
 
     try:
         session = requests.Session()
@@ -44,25 +58,29 @@ def check_events():
             "Accept-Language": "de-DE,de;q=0.9",
         })
 
+        # Seite abrufen
         response = session.get(URL, timeout=15)
 
         if response.status_code != 200:
             raise Exception(f"HTTP Fehler {response.status_code}")
 
+        # Text aus der Webseite extrahieren
         soup = BeautifulSoup(response.text, "html.parser")
         full_text = soup.get_text(" | ", strip=True)
 
         events_found = False
         sent_hashes = set()
 
-        for match in re.finditer(r"\d{2}\.\d{2}\.\d{4}", full_text):
-
-            datum_str = match.group()
-
-            if datum_str != heute:
-                continue
+        # Wir suchen jetzt flexibel nach dem heutigen Datum im Text
+        for match in re.finditer(regex_heute, full_text, re.IGNORECASE):
+            datum_str = match.group().strip()
+            
+            # Falls das Datum am Ende einen überflüssigen Punkt oder Leerzeichen hat
+            if datum_str.endswith('.') and not datum_str[-2].isdigit():
+                datum_str = datum_str[:-1].strip()
 
             found_idx = match.start()
+            # Wir schneiden großzügig Text rund um das gefundene Datum aus
             start_pos = max(0, found_idx - 300)
             end_pos = min(len(full_text), found_idx + 500)
             ausschnitt = full_text[start_pos:end_pos]
@@ -75,7 +93,7 @@ def check_events():
             b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
             beginn = b_match.group(1).replace(".", ":") if b_match else "Unbekannt"
 
-            # Titel finden
+            # Titel finden (Textteil direkt vor dem Datum)
             parts = ausschnitt.split(datum_str)
             titel = "Event"
 
@@ -86,6 +104,7 @@ def check_events():
                 for teil in reversed(titel_teile):
                     teil = teil.strip()
 
+                    # Wir filtern nutzlose Wörter aus, um den echten Event-Namen zu finden
                     if (
                         len(teil) > 5 and
                         not any(w in teil for w in [
@@ -100,6 +119,7 @@ def check_events():
 
             titel = categorize_event(titel)
 
+            # Doppelte Push-Nachrichten für dasselbe Event am selben Tag vermeiden
             hash_id = f"{titel}-{beginn}"
             if hash_id in sent_hashes:
                 continue
@@ -117,12 +137,11 @@ def check_events():
             send_notification(titel, body)
 
         if not events_found:
-            print("Heute keine Veranstaltungen.")
+            print(f"Heute ({tag}. {monat_name}) keine Veranstaltungen gefunden.")
 
     except Exception as e:
         print(f"Fehler: {e}")
         send_notification("Skript Error", str(e))
-
 
 if __name__ == "__main__":
     check_events()
