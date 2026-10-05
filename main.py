@@ -13,26 +13,48 @@ URL = "https://www.max-schmeling-halle.de/events"
 BERLIN = ZoneInfo("Europe/Berlin")
 
 MONATE = {
+    "jan": 1,
     "januar": 1,
+    "feb": 2,
     "februar": 2,
+    "mär": 3,
     "märz": 3,
+    "mrz": 3,
+    "apr": 4,
     "april": 4,
     "mai": 5,
+    "jun": 6,
     "juni": 6,
+    "jul": 7,
     "juli": 7,
+    "aug": 8,
     "august": 8,
+    "sep": 9,
+    "sept": 9,
     "september": 9,
+    "okt": 10,
     "oktober": 10,
+    "nov": 11,
     "november": 11,
+    "dez": 12,
     "dezember": 12,
 }
 
+WOCHENTAGE_PATTERN = (
+    r"(?:Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag|"
+    r"Mo\.?|Di\.?|Mi\.?|Do\.?|Fr\.?|Sa\.?|So\.?)"
+)
+
+MONATE_PATTERN = "|".join(
+    sorted((re.escape(monat) for monat in MONATE), key=len, reverse=True)
+)
+
 EVENT_RE = re.compile(
-    r"(?:Mo|Di|Mi|Do|Fr|Sa|So)\.,\s*"
-    r"(?P<day>\d{1,2})\.\s*"
-    r"(?P<month>Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s*"
-    r"'(?P<year>\d{2})\s+"
-    r"(?P<time>\d{1,2}:\d{2})\s*Uhr",
+    rf"{WOCHENTAGE_PATTERN}\s*,?\s*"
+    rf"(?P<day>\d{{1,2}})\.?\s+"
+    rf"(?P<month>{MONATE_PATTERN})\s+"
+    rf"'?(?P<year>\d{{2}}|\d{{4}})\s+"
+    rf"(?P<time>\d{{1,2}}:\d{{2}})\s*Uhr",
     re.IGNORECASE,
 )
 
@@ -60,7 +82,18 @@ def send_notification(title, body):
 def categorize_event(title):
     text = title.lower()
 
-    if any(word in text for word in (" vs.", "füchse", "handball", "volleys", "alba berlin", "volleyball")):
+    if any(
+        word in text
+        for word in (
+            " vs.",
+            "füchse",
+            "handball",
+            "volleys",
+            "alba berlin",
+            "volleyball",
+            "basketball",
+        )
+    ):
         return f"Sport: {title}"
 
     if any(word in text for word in ("tour", "live", "konzert")):
@@ -71,7 +104,12 @@ def categorize_event(title):
 
 def clean_event_title(text):
     title = TRAILING_STATUS_RE.sub("", text).strip()
-    title = re.sub(r"\s+(?:Tickets|Infos)\s*$", "", title, flags=re.IGNORECASE).strip()
+    title = re.sub(
+        r"\s+(?:Tickets|Infos)\s*$",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
     return title or "Veranstaltung"
 
 
@@ -80,9 +118,6 @@ def extract_events(html):
     events = []
     seen = set()
 
-    # Auf der aktuellen Seite ist jede Veranstaltung als eigener Link ausgegeben.
-    # Dadurch bleibt die Zuordnung von Datum, Uhrzeit und Titel stabil, ohne
-    # positionsabhängig im gesamten Seitentext suchen zu müssen.
     for link in soup.find_all("a", href=True):
         text = " ".join(link.stripped_strings)
         match = EVENT_RE.search(text)
@@ -90,11 +125,14 @@ def extract_events(html):
         if not match:
             continue
 
-        month = MONATE[match.group("month").lower()]
-        year = 2000 + int(match.group("year"))
+        month_name = match.group("month").lower()
+        month = MONATE[month_name]
+
+        year_value = int(match.group("year"))
+        year = year_value if year_value >= 100 else 2000 + year_value
+
         day = int(match.group("day"))
         start_time = match.group("time")
-
         event_date = datetime(year, month, day, tzinfo=BERLIN).date()
         title = clean_event_title(text[match.end():])
 
@@ -123,14 +161,29 @@ def fetch_events():
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 Chrome/130 Safari/537.36"
             ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept": (
+                "text/html,application/xhtml+xml,"
+                "application/xml;q=0.9,*/*;q=0.8"
+            ),
             "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
         }
     )
 
     response = session.get(URL, timeout=20)
     response.raise_for_status()
-    return extract_events(response.text)
+
+    events = extract_events(response.text)
+
+    # Die Eventseite enthält normalerweise viele zukünftige Termine.
+    # Falls gar nichts erkannt wird, ist eher der Seitenaufbau geändert worden
+    # als dass tatsächlich kein einziges Event existiert.
+    if not events:
+        raise RuntimeError(
+            "Keine Veranstaltungen auf der Eventseite erkannt. "
+            "Möglicherweise hat sich das Webseitenformat geändert."
+        )
+
+    return events
 
 
 def check_events():
