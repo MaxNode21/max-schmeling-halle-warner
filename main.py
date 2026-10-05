@@ -64,15 +64,16 @@ TRAILING_STATUS_RE = re.compile(
 )
 
 
-def send_notification(title, body):
+def send_notification(title, body, click_url=URL):
     response = requests.post(
-        f"https://ntfy.sh/{KANAL_NAME}",
-        data=body.encode("utf-8"),
-        headers={
-            "Title": title,
-            "Priority": "high",
-            "Tags": "ticket",
-            "Click": URL,
+        "https://ntfy.sh/",
+        json={
+            "topic": KANAL_NAME,
+            "message": body,
+            "title": title,
+            "priority": 4,
+            "tags": ["ticket"],
+            "click": click_url,
         },
         timeout=15,
     )
@@ -210,7 +211,7 @@ def check_events():
         )
 
         print(f"Sende Push für: {title}")
-        send_notification(title, body)
+        send_notification(title, body, event["url"])
 
 
 def main():
