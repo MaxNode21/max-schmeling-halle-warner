@@ -1,147 +1,194 @@
+import os
+import re
+import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-import re
 
-KANAL_NAME = "max-schmeling-halle-warner"
-URL = "https://www.max-schmeling-halle.de/events-tickets"
+
+KANAL_NAME = os.getenv("NTFY_TOPIC", "max-schmeling-halle-warner")
+URL = "https://www.max-schmeling-halle.de/events"
+BERLIN = ZoneInfo("Europe/Berlin")
+
+MONATE = {
+    "januar": 1,
+    "februar": 2,
+    "märz": 3,
+    "april": 4,
+    "mai": 5,
+    "juni": 6,
+    "juli": 7,
+    "august": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "dezember": 12,
+}
+
+EVENT_RE = re.compile(
+    r"(?:Mo|Di|Mi|Do|Fr|Sa|So)\.,\s*"
+    r"(?P<day>\d{1,2})\.\s*"
+    r"(?P<month>Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s*"
+    r"'(?P<year>\d{2})\s+"
+    r"(?P<time>\d{1,2}:\d{2})\s*Uhr",
+    re.IGNORECASE,
+)
+
+TRAILING_STATUS_RE = re.compile(
+    r"\s+(?:Im Vorverkauf erhältlich|ausverkauft)\s+(?:Tickets|Infos)\s*$",
+    re.IGNORECASE,
+)
+
 
 def send_notification(title, body):
-    requests.post(
+    response = requests.post(
         f"https://ntfy.sh/{KANAL_NAME}",
         data=body.encode("utf-8"),
         headers={
             "Title": title,
             "Priority": "high",
             "Tags": "ticket",
-            "Click": URL
+            "Click": URL,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+
+
+def categorize_event(title):
+    text = title.lower()
+
+    if any(word in text for word in (" vs.", "füchse", "handball", "volleys", "alba berlin", "volleyball")):
+        return f"Sport: {title}"
+
+    if any(word in text for word in ("tour", "live", "konzert")):
+        return f"Konzert: {title}"
+
+    return f"Event: {title}"
+
+
+def clean_event_title(text):
+    title = TRAILING_STATUS_RE.sub("", text).strip()
+    title = re.sub(r"\s+(?:Tickets|Infos)\s*$", "", title, flags=re.IGNORECASE).strip()
+    return title or "Veranstaltung"
+
+
+def extract_events(html):
+    soup = BeautifulSoup(html, "html.parser")
+    events = []
+    seen = set()
+
+    # Auf der aktuellen Seite ist jede Veranstaltung als eigener Link ausgegeben.
+    # Dadurch bleibt die Zuordnung von Datum, Uhrzeit und Titel stabil, ohne
+    # positionsabhängig im gesamten Seitentext suchen zu müssen.
+    for link in soup.find_all("a", href=True):
+        text = " ".join(link.stripped_strings)
+        match = EVENT_RE.search(text)
+
+        if not match:
+            continue
+
+        month = MONATE[match.group("month").lower()]
+        year = 2000 + int(match.group("year"))
+        day = int(match.group("day"))
+        start_time = match.group("time")
+
+        event_date = datetime(year, month, day, tzinfo=BERLIN).date()
+        title = clean_event_title(text[match.end():])
+
+        event_id = (event_date.isoformat(), start_time, title)
+        if event_id in seen:
+            continue
+
+        seen.add(event_id)
+        events.append(
+            {
+                "date": event_date,
+                "time": start_time,
+                "title": title,
+                "url": requests.compat.urljoin(URL, link.get("href")),
+            }
+        )
+
+    return events
+
+
+def fetch_events():
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/130 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
         }
     )
 
-def categorize_event(titel):
-    t = titel.lower()
+    response = session.get(URL, timeout=20)
+    response.raise_for_status()
+    return extract_events(response.text)
 
-    if any(w in t for w in ["vs", "füchse", "handball", "spiel"]):
-        return f"Sport: {titel}"
-    elif any(w in t for w in ["tour", "live", "konzert"]):
-        return f"Konzert: {titel}"
-    else:
-        return f"Event: {titel}"
 
 def check_events():
-    print("Starte Morgen-Check...")
+    today = datetime.now(BERLIN).date()
 
-    # Flexibles Datum für HEUTE berechnen
-    heute = datetime.now()
-    tag = heute.day
-    jahr = heute.year
-    jahr_kurz = heute.strftime("%y")
-    
-    # Deutsche Monatsnamen für das Suchmuster
-    monate = ["", "Januar", "Februar", "März", "April", "Mai", "Juni", 
-              "Juli", "August", "September", "Oktober", "November", "Dezember"]
-    monate_kurz = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", 
-                   "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-    
-    monat_name = monate[heute.month]
-    monat_kurz = monate_kurz[heute.month]
-    monat_zahl = heute.month
-    
-    # Baut ein flexibles Suchmuster für "Heute" (z.B. "09.03.2026", "9. März 2026", "09 Mär 26", "09.03.")
-    regex_heute = rf"0?{tag}\.?\s*(?:0?{monat_zahl}|{monat_name}|{monat_kurz})\.?\s*(?:{jahr}|{jahr_kurz})?"
+    print(f"Starte Event-Check für {today:%d.%m.%Y} ...")
+    print(f"Rufe {URL} ab ...")
 
+    events = fetch_events()
+    print(f"{len(events)} Veranstaltungstermine erkannt.")
+
+    todays_events = [event for event in events if event["date"] == today]
+
+    if not todays_events:
+        print(f"Heute ({today:%d.%m.%Y}) keine Veranstaltungen gefunden.")
+        return
+
+    for event in todays_events:
+        title = categorize_event(event["title"])
+        body = (
+            f"📅 Heute: {event['date']:%d.%m.%Y}\n"
+            f"🎬 Beginn: {event['time']} Uhr\n"
+            f"🔗 {event['url']}"
+        )
+
+        print(f"Sende Push für: {title}")
+        send_notification(title, body)
+
+
+def main():
     try:
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "de-DE,de;q=0.9",
-        })
+        if "--test" in sys.argv:
+            print("Sende Test-Nachricht ...")
+            send_notification(
+                "Test: Max-Schmeling-Halle",
+                "✅ Der Max-Schmeling-Halle-Warner funktioniert.",
+            )
+            print("Test-Nachricht wurde gesendet.")
+            return
 
-        # Seite abrufen
-        response = session.get(URL, timeout=15)
+        check_events()
 
-        if response.status_code != 200:
-            raise Exception(f"HTTP Fehler {response.status_code}")
+    except Exception as exc:
+        print(f"Fehler: {type(exc).__name__}: {exc}")
 
-        # Text aus der Webseite extrahieren
-        soup = BeautifulSoup(response.text, "html.parser")
-        full_text = soup.get_text(" | ", strip=True)
-
-        events_found = False
-        sent_hashes = set()
-
-        # Wir suchen jetzt flexibel nach dem heutigen Datum im Text
-        for match in re.finditer(regex_heute, full_text, re.IGNORECASE):
-            datum_str = match.group().strip()
-            
-            # Falls das Datum am Ende einen überflüssigen Punkt oder Leerzeichen hat
-            if datum_str.endswith('.') and not datum_str[-2].isdigit():
-                datum_str = datum_str[:-1].strip()
-
-            found_idx = match.start()
-            # Wir schneiden großzügig Text rund um das gefundene Datum aus
-            start_pos = max(0, found_idx - 300)
-            end_pos = min(len(full_text), found_idx + 500)
-            ausschnitt = full_text[start_pos:end_pos]
-
-            # Einlass suchen
-            e_match = re.search(r"Einlass.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
-            einlass = e_match.group(1).replace(".", ":") if e_match else "Unbekannt"
-
-            # Beginn suchen
-            b_match = re.search(r"Beginn.*?(\d{1,2}[:.]\d{2})", ausschnitt, re.IGNORECASE)
-            beginn = b_match.group(1).replace(".", ":") if b_match else "Unbekannt"
-
-            # Titel finden (Textteil direkt vor dem Datum)
-            parts = ausschnitt.split(datum_str)
-            titel = "Event"
-
-            if len(parts) > 0:
-                text_davor = parts[0]
-                titel_teile = text_davor.split("|")
-
-                for teil in reversed(titel_teile):
-                    teil = teil.strip()
-
-                    # Wir filtern nutzlose Wörter aus, um den echten Event-Namen zu finden
-                    if (
-                        len(teil) > 5 and
-                        not any(w in teil for w in [
-                            "Montag", "Dienstag", "Mittwoch",
-                            "Donnerstag", "Freitag",
-                            "Samstag", "Sonntag",
-                            "Tickets", "Infos", "Details"
-                        ])
-                    ):
-                        titel = teil
-                        break
-
-            titel = categorize_event(titel)
-
-            # Doppelte Push-Nachrichten für dasselbe Event am selben Tag vermeiden
-            hash_id = f"{titel}-{beginn}"
-            if hash_id in sent_hashes:
-                continue
-
-            sent_hashes.add(hash_id)
-            events_found = True
-
-            body = (
-                f"📅 Heute: {datum_str}\n"
-                f"🚪 Einlass: {einlass} Uhr\n"
-                f"🎬 Beginn: {beginn} Uhr"
+        try:
+            send_notification(
+                "Max-Schmeling-Halle: Skriptfehler",
+                f"{type(exc).__name__}: {exc}",
+            )
+        except Exception as notification_exc:
+            print(
+                "Fehler-Nachricht konnte nicht gesendet werden:",
+                notification_exc,
             )
 
-            print(f"Sende Push für: {titel}")
-            send_notification(titel, body)
+        raise
 
-        if not events_found:
-            print(f"Heute ({tag}. {monat_name}) keine Veranstaltungen gefunden.")
-
-    except Exception as e:
-        print(f"Fehler: {e}")
-        send_notification("Skript Error", str(e))
 
 if __name__ == "__main__":
-    check_events()
+    main()
