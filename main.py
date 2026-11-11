@@ -91,8 +91,8 @@ EVENT_RE = re.compile(
 
 # Status- und Button-Texte, die auf der Eventseite hinter dem Titel stehen.
 TRAILING_RE = re.compile(
-    r"\s*(?:\bTickets|\bInfos?|\bIm Vorverkauf erhältlich|\bausverkauft"
-    r"|\babgesagt|\bverschoben|\bverlegt|\bentfällt)\s*$",
+    r"\s*(?:\bTickets|\bInfos?|\b(?:demnächst )?im Vorverkauf(?: erhältlich)?"
+    r"|\bausverkauft|\babgesagt|\bverschoben|\bverlegt|\bentfällt)\s*$",
     re.IGNORECASE,
 )
 
@@ -103,7 +103,7 @@ STATUS_RE = re.compile(r"\b(abgesagt|verschoben|verlegt|entfällt)\b", re.IGNORE
 # "Oliver" nicht als "live" und "Tournament" nicht als "tour" zählt.
 # Zusammensetzungen wie "Weihnachtskonzert" oder "Abschiedstour" passen trotzdem.
 SPORT_RE = re.compile(
-    r"\bvs\b|füchse|volleys|\balba\b|handball|volleyball|basketball"
+    r"\bvs\b|füchse|volleys|\balba\b|handball|volleyball|basketball|globetrotters"
     r"|bundesliga|champions league|pokal|turnier|box(?:en|ing|gala|kampf)|darts",
     re.IGNORECASE,
 )
