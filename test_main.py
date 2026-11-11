@@ -237,26 +237,16 @@ class AblaufTest(unittest.TestCase):
 
 
 class NtfyTest(unittest.TestCase):
-    def test_kanal_kommt_aus_secret(self):
-        with mock.patch.dict(os.environ, {"NTFY_TOPIC": "msh-geheim"}):
-            self.assertEqual(main.ntfy_topic(), "msh-geheim")
-
-    def test_leeres_secret_faellt_auf_standard_zurueck(self):
-        # So sieht es in GitHub Actions aus, wenn das Secret nicht angelegt ist.
-        with mock.patch.dict(os.environ, {"NTFY_TOPIC": ""}):
-            self.assertEqual(main.ntfy_topic(), main.STANDARD_KANAL)
-
     def test_nachricht_wird_als_json_verschickt(self):
         session = mock.Mock()
-        with mock.patch.dict(os.environ, {"NTFY_TOPIC": "msh-geheim"}):
-            main.send_notification(session, main.Notification("Titel", "Text"))
+        main.send_notification(session, main.Notification("Titel", "Text"))
 
         session.post.assert_called_once()
         self.assertEqual(session.post.call_args.args[0], "https://ntfy.sh/")
         self.assertEqual(
             session.post.call_args.kwargs["json"],
             {
-                "topic": "msh-geheim",
+                "topic": "max-schmeling-halle-warner",
                 "title": "Titel",
                 "message": "Text",
                 "priority": 4,
