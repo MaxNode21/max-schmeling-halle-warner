@@ -26,10 +26,8 @@ URL = "https://www.max-schmeling-halle.de/events"
 NTFY_URL = "https://ntfy.sh/"
 BERLIN = ZoneInfo("Europe/Berlin")
 
-# Nur die Notlösung, falls das Secret NTFY_TOPIC fehlt. ntfy-Kanäle sind
-# öffentlich: Wer den Namen kennt (und der steht hier im öffentlichen Repo),
-# kann mitlesen und dir selbst Nachrichten aufs Handy schicken.
-STANDARD_KANAL = "max-schmeling-halle-warner"
+# Öffentlicher ntfy-Kanal: Jeder kann ihn in der ntfy-App abonnieren.
+KANAL_NAME = "max-schmeling-halle-warner"
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -146,15 +144,11 @@ def create_session():
     return session
 
 
-def ntfy_topic():
-    return os.getenv("NTFY_TOPIC", "").strip() or STANDARD_KANAL
-
-
 def send_notification(session, notification):
     response = session.post(
         NTFY_URL,
         json={
-            "topic": ntfy_topic(),
+            "topic": KANAL_NAME,
             "title": notification.title,
             "message": notification.body,
             "priority": notification.priority,
@@ -380,13 +374,6 @@ def main(argv=None):
         else:
             print(f"Sende Push: {notification.title}")
             send_notification(session, notification)
-
-    if ntfy_topic() == STANDARD_KANAL:
-        # Erscheint in GitHub Actions als gelbe Warnung in der Lauf-Übersicht.
-        print(
-            "::warning::Secret NTFY_TOPIC ist nicht gesetzt, es wird der "
-            f"öffentliche Kanal '{STANDARD_KANAL}' benutzt. Siehe README."
-        )
 
     try:
         if args.test:

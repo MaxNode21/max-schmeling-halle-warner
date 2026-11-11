@@ -5,14 +5,12 @@ und schickt eine Push-Nachricht aufs Handy, wenn dort heute eine Veranstaltung i
 
 Läuft komplett über GitHub Actions, die Nachrichten kommen über [ntfy](https://ntfy.sh).
 
-## Einrichten
+## Abonnieren
 
-1. ntfy-App installieren und einen **schwer zu erratenden** Kanal abonnieren, z. B. mit diesem Namen:
-   `python -c "import secrets; print('msh-' + secrets.token_urlsafe(12))"`
-   ntfy-Kanäle sind öffentlich: Wer den Namen kennt, kann mitlesen und dir Nachrichten schicken.
-   Deshalb steht der Name nicht im Code.
-2. Im Repo unter **Settings → Secrets and variables → Actions** ein Secret `NTFY_TOPIC` mit dem Namen anlegen.
-3. Unter **Actions → Parkplatz Checker → Run workflow** den Modus `testnachricht` starten und prüfen, ob die Nachricht ankommt.
+Wer die Warnungen bekommen will, installiert die ntfy-App und abonniert den
+öffentlichen Kanal **`max-schmeling-halle-warner`**.
+
+Test: Unter **Actions → Parkplatz Checker → Run workflow** den Modus `testnachricht` starten und prüfen, ob die Nachricht ankommt.
 
 ## Manuell starten
 

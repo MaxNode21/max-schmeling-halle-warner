@@ -44,7 +44,6 @@ jobs:
 
       - name: Skript ausführen
         env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           # Eingaben nur über Umgebungsvariablen weiterreichen und nie direkt
           # in den Befehl einsetzen (Schutz vor Script-Injection).
           MODUS: ${{ inputs.modus }}
