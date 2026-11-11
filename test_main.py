@@ -101,6 +101,14 @@ class ExtractEventsTest(unittest.TestCase):
         self.assertEqual(finde("RIN Nostalgia Tour").status, "verschoben")
         self.assertIsNone(finde("berq Tour 2026").status)
 
+    def test_demnaechst_im_vorverkauf_wird_entfernt(self):
+        self.assertEqual(
+            main.clean_event_title(
+                " Pro Climbing League Finals demnächst im Vorverkauf"
+            ),
+            "Pro Climbing League Finals",
+        )
+
     def test_ausgeschriebene_namen_und_vierstelliges_jahr(self):
         self.assertEqual(finde("berq Tour 2026").day, date(2026, 11, 28))
 
@@ -125,6 +133,7 @@ class CategorizeTest(unittest.TestCase):
             "BR Volleys vs. SV Warnemünde",
             "Alba Berlin vs. SC Rasta Vechta",
             "DHB-Pokal Final Four",
+            "Harlem Globetrotters RIVALRY TOUR",
         ):
             self.assertEqual(main.categorize_event(titel), f"Sport: {titel}")
 
